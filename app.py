@@ -1,15 +1,20 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from pathlib import Path
+import requests
+from io import BytesIO
 from datetime import datetime
 
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN — edita solo esta sección
 # ─────────────────────────────────────────────
 
-# Nombre del archivo Excel (debe estar en la misma carpeta que app.py)
-EXCEL_FILE = "Datos para Indicadores-FNTP-2025-264.xlsx"
+# Enlace de SharePoint con &download=1 al final
+SHAREPOINT_URL = (
+    "https://fonturcolombia-my.sharepoint.com/:x:/g/personal/"
+    "alara_fontur_com_co/IQAHr1G56IHiQ7ulXGBvBNP8AVhnUF5G9p_Mh0EO_oSuN50"
+    "?e=6Mftls&download=1"
+)
 
 HOJA = "Datos"
 # ─────────────────────────────────────────────
@@ -17,14 +22,21 @@ HOJA = "Datos"
 
 @st.cache_data(ttl=300)   # refresca cada 5 minutos
 def cargar_excel() -> pd.DataFrame:
-    """Lee el Excel desde la misma carpeta que app.py."""
-    ruta = Path(__file__).parent / EXCEL_FILE
-    if not ruta.exists():
-        raise FileNotFoundError(
-            f"No se encontró el archivo '{EXCEL_FILE}' en la carpeta del proyecto.\n"
-            f"Ruta buscada: {ruta}"
+    """Descarga el Excel desde SharePoint y retorna la hoja Datos."""
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/octet-stream",
+    }
+    resp = requests.get(SHAREPOINT_URL, headers=headers, timeout=30, allow_redirects=True)
+    resp.raise_for_status()
+
+    content_type = resp.headers.get("Content-Type", "")
+    if "html" in content_type:
+        raise ValueError(
+            "SharePoint devolvió HTML en vez del archivo. "
+            "Verifica que el enlace esté compartido como 'Cualquier persona puede ver'."
         )
-    return pd.read_excel(ruta, sheet_name=HOJA, header=None)
+    return pd.read_excel(BytesIO(resp.content), sheet_name=HOJA, header=None)
 
 
 def extraer_datos(df: pd.DataFrame) -> dict:
@@ -110,7 +122,7 @@ st.title("📊 Seguimiento Proyecto FNTP-2025-264")
 st.caption("Campaña Colombia el País de la Belleza · FONTUR")
 
 # ── Carga de datos ───────────────────────────
-with st.spinner("Cargando datos desde la nube..."):
+with st.spinner("Cargando datos desde SharePoint..."):
     try:
         df_raw = cargar_excel()
         datos  = extraer_datos(df_raw)
@@ -121,7 +133,7 @@ with st.spinner("Cargando datos desde la nube..."):
         st.success(f"Datos actualizados · {datetime.now().strftime('%d/%m/%Y %H:%M')}", icon="✅")
     except Exception as e:
         st.error(f"Error al cargar el archivo: {e}")
-        st.info("Verifica que el archivo esté compartido públicamente y que el ID/URL sea correcto.")
+        st.info("Verifica que el enlace de SharePoint esté compartido como 'Cualquier persona puede ver'.")
         st.stop()
 
 # ── KPIs ─────────────────────────────────────
@@ -176,7 +188,6 @@ with tab1:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Tabla detalle
     st.subheader("Detalle por período")
     tabla_curva = curva.copy()
     tabla_curva["Programado"] = tabla_curva["Programado"].map(lambda x: f"{x:.1f}%" if x else "—")
@@ -193,7 +204,6 @@ with tab1:
 with tab2:
     st.subheader("Indicadores de Gestión — Corte Feb-26")
 
-    # Semáforo resumen
     verde    = int((igs["Semáforo"] == 3).sum())
     amarillo = int((igs["Semáforo"] == 2).sum())
     rojo     = int((igs["Semáforo"] == 1).sum())
@@ -202,7 +212,6 @@ with tab2:
     c2.metric("🟡 En observación",       amarillo)
     c3.metric("🔴 Crítico / Sin avance", rojo)
 
-    # Gráfico barras horizontales
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(
         y=igs["Cód."],
@@ -232,7 +241,6 @@ with tab2:
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-    # Tabla IGs
     tabla_ig = igs.copy()
     tabla_ig["Sem."]       = tabla_ig["Semáforo"].map(semaforo_color)
     tabla_ig["Meta Acum."] = tabla_ig["Meta Acum."].map(lambda x: f"{x*100:.1f}%")
@@ -261,11 +269,11 @@ with tab3:
 with st.sidebar:
     st.header("⚙️ Configuración")
     st.markdown(f"""
-    **Proyecto:** FNTP-2025-264  
-    **Contrato:** FNTC-161-2026  
-    **Horizonte:** Oct-25 – Ago-26  
-    **Corte actual:** Feb-26 (Mes 5)  
-    **Presupuesto:** ${presupuesto/1e9:.2f}MM COP  
+    **Proyecto:** FNTP-2025-264
+    **Contrato:** FNTC-161-2026
+    **Horizonte:** Oct-25 – Ago-26
+    **Corte actual:** Feb-26 (Mes 5)
+    **Presupuesto:** ${presupuesto/1e9:.2f}MM COP
     """)
     st.divider()
     if st.button("🔄 Forzar actualización"):
